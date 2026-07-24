@@ -78,13 +78,32 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=os.getenv("LINEAR_API_KEY"),
         help="Linear API key for step 4",
     )
-    parser.add_argument("--template-name", default="Monthly Release")
+    parser.add_argument(
+        "--template-name",
+        default="",
+        help="Optional Linear issue template (empty = none)",
+    )
     parser.add_argument("--template-id", default="")
-    parser.add_argument("--assignee-query", default="gaurav")
+    parser.add_argument(
+        "--assignee-query",
+        default="gaurav@stackgen.com",
+        help="Assignee email or name (default: gaurav@stackgen.com)",
+    )
     parser.add_argument("--team-key", default="HZ")
     parser.add_argument("--team-id", default="")
     parser.add_argument("--title", default="")
     parser.add_argument("--month-label", default="")
+    parser.add_argument(
+        "--release-kind",
+        choices=("weekly", "monthly"),
+        default="weekly",
+        help="Title: [Weekly release] <tag> or [Monthly release] <tag>",
+    )
+    parser.add_argument(
+        "--state-name",
+        default="Todo",
+        help="Linear workflow state (default: Todo)",
+    )
     return parser
 
 
@@ -107,6 +126,9 @@ def main() -> int:
             team_id=parsed.team_id,
             title=parsed.title,
             month_label=parsed.month_label,
+            release_kind=parsed.release_kind,
+            stackgen_tag=parsed.stackgen_tag,
+            state_name=parsed.state_name,
             dry_run=parsed.dry_run_ticket,
         )
 

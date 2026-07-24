@@ -51,6 +51,61 @@ class RepositoryProcessor:
         )
         self.linear_api_key = os.getenv('LINEAR_API_KEY')
         self.linear_api_url = "https://api.linear.app/graphql"
+
+    @staticmethod
+    def _linear_issue_browser_url(ticket_id: str) -> str:
+        """Public web URL for an issue id (used when GraphQL returns HTTP 400)."""
+        ws = (os.getenv('LINEAR_WEB_WORKSPACE') or 'stackgen').strip().strip('/')
+        if not ws:
+            ws = 'stackgen'
+        return f'https://linear.app/{ws}/issue/{ticket_id}'
+
+    def _unresolved_issue_placeholder(self, ticket_id: str) -> Dict[str, object]:
+        """Placeholder when the API cannot resolve the issue id (HTTP 400 or GraphQL issue not found)."""
+        return {
+            'id': ticket_id,
+            'title': '',
+            'state': 'Unknown',
+            'priority': 0,
+            'assignee': 'Unassigned',
+            'projectId': 'No Project',
+            'projectName': 'No Project',
+            'issueUrl': self._linear_issue_browser_url(ticket_id),
+            'fetchHttpStatus': '400',
+        }
+
+    @staticmethod
+    def _graphql_errors_indicate_issue_not_found(errors: object) -> bool:
+        """
+        Linear often returns HTTP 200 with errors[].extensions.statusCode 400 for
+        missing/legacy identifiers (e.g. AE-1952) while the browser URL still resolves.
+        """
+        if not isinstance(errors, list):
+            return False
+        for err in errors:
+            if not isinstance(err, dict):
+                continue
+            path = err.get('path')
+            if not isinstance(path, list) or not path or path[-1] != 'issue':
+                continue
+            ext = err.get('extensions')
+            ext = ext if isinstance(ext, dict) else {}
+            if ext.get('statusCode') == 400:
+                return True
+            if ext.get('code') == 'INPUT_ERROR':
+                return True
+            msg = str(err.get('message', '')).lower()
+            if 'not found' in msg and 'issue' in msg:
+                return True
+        return False
+
+    @staticmethod
+    def _is_canceled_ticket(details: Optional[Dict[str, str]]) -> bool:
+        """True when Linear workflow state is Canceled (case-insensitive)."""
+        if not details:
+            return False
+        state = str(details.get('state') or '').strip().lower()
+        return state in ('canceled', 'cancelled')
     
     def extract_repo_path(self, repo_url: str) -> Optional[str]:
         """
@@ -191,11 +246,17 @@ class RepositoryProcessor:
                 json=payload,
                 timeout=10
             )
+
+            if response.status_code == 400:
+                return self._unresolved_issue_placeholder(ticket_id)
             
             if response.status_code == 200:
                 data = response.json()
                 
                 if 'errors' in data:
+                    errs = data.get('errors')
+                    if self._graphql_errors_indicate_issue_not_found(errs):
+                        return self._unresolved_issue_placeholder(ticket_id)
                     return None
                 
                 if 'data' in data and data['data'].get('issue'):
@@ -570,10 +631,16 @@ class RepositoryProcessor:
         
         # Fetch Linear details for all unique tickets
         ticket_details_map = self.fetch_all_ticket_details(all_tickets_set)
+
+        # Omit tickets whose Linear state is Canceled from aggregated outputs
+        included_tickets_set = {
+            tid for tid in all_tickets_set
+            if not self._is_canceled_ticket(ticket_details_map.get(tid))
+        }
         
         # Collect unique project IDs from ticket details
         project_ids = set()
-        for ticket_id in all_tickets_set:
+        for ticket_id in included_tickets_set:
             details = ticket_details_map.get(ticket_id)
             if details and details.get('projectId') and details['projectId'] != 'No Project':
                 project_ids.add(details['projectId'])
@@ -582,9 +649,9 @@ class RepositoryProcessor:
         project_details_map = self.fetch_all_project_details(project_ids)
         
         # Calculate max widths for uniform formatting
-        max_ticket_id_len = max(len(tid) for tid in all_tickets_set) if all_tickets_set else 0
+        max_ticket_id_len = max(len(tid) for tid in included_tickets_set) if included_tickets_set else 0
         max_status_len = 0
-        for ticket_id in all_tickets_set:
+        for ticket_id in included_tickets_set:
             details = ticket_details_map.get(ticket_id)
             if details and details.get('state'):
                 status_len = len(details['state'])
@@ -594,9 +661,11 @@ class RepositoryProcessor:
         
         # Build all_tickets array as uniformly formatted strings: "TICKET-ID: status: Summary"
         all_tickets = []
-        for ticket_id in sorted(all_tickets_set):
+        for ticket_id in sorted(included_tickets_set):
             details = ticket_details_map.get(ticket_id)
-            if details and details.get('title'):
+            if details and str(details.get('fetchHttpStatus')) == '400' and details.get('issueUrl'):
+                all_tickets.append(f"{ticket_id}: {details['issueUrl']}")
+            elif details and details.get('title'):
                 # Format with uniform spacing: "AE-1234    : Done        : Ticket Summary"
                 status = details.get('state', 'Unknown')
                 formatted_ticket = f"{ticket_id:<{max_ticket_id_len}}: {status:<{max_status_len}}: {details['title']}"
@@ -607,7 +676,7 @@ class RepositoryProcessor:
         
         # Group tickets by project (still using IDs for backward compatibility)
         tickets_by_project = {}
-        for ticket_id in sorted(all_tickets_set):
+        for ticket_id in sorted(included_tickets_set):
             prefix = ticket_id.split('-')[0]
             if prefix not in tickets_by_project:
                 tickets_by_project[prefix] = []
@@ -638,7 +707,7 @@ class RepositoryProcessor:
                 'processed': processed,
                 'skipped': skipped,
                 'failed': failed,
-                'total_unique_tickets': len(all_tickets_set),
+                'total_unique_tickets': len(included_tickets_set),
                 'total_unique_projects': len(projects_list)
             },
             'services': results,

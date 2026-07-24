@@ -87,11 +87,11 @@ SERVICE_VERSION_MAP = {
         "repository": "https://github.com/appcd-dev/aiden-ui-v2"
     },
     "stackgen-guild": {
-        "version_key": "STACKGEN_GUILD_VERSION",
+        "version_key": "STACKGEN_GUILD",
         "repository": "https://github.com/appcd-dev/stackgen-guild"
     },
     "stackgen-sre-app": {
-        "version_key": "STACKGEN_SRE_APP_VERSION",
+        "version_key": "STACKGEN_SRE_APP",
         "repository": "https://github.com/appcd-dev/stackgen-sre-app"
     }
 }
