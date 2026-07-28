@@ -675,6 +675,40 @@ def create_issue(
     raise RuntimeError(f"Failed creating Linear issue: {last_error}")
 
 
+# Handles mentioned on the candidate-build comment after ticket create.
+CANDIDATE_BUILD_CC_HANDLES = ("saumya-ctr", "harshit", "gaurav")
+
+
+def candidate_build_comment_body(release_id: str) -> str:
+    """Comment body posted on the new release ticket; release_id comes from TO_REF / stackgen_tag."""
+    release = (release_id or "").strip() or "unknown"
+    cc = "  ".join(f"@{handle}" for handle in CANDIDATE_BUILD_CC_HANDLES)
+    return f"Candidate build for the coming release {release}. Cc: {cc}"
+
+
+def create_issue_comment(api_key: str, issue_id: str, body: str) -> Dict[str, Any]:
+    """Post a comment on an existing Linear issue (by UUID)."""
+    mutation = """
+    mutation CommentCreate($input: CommentCreateInput!) {
+      commentCreate(input: $input) {
+        success
+        comment { id body url }
+      }
+    }
+    """
+    payload = linear_request(
+        api_key,
+        mutation,
+        {"input": {"issueId": issue_id, "body": body}},
+    ).get("commentCreate", {})
+    if not payload.get("success"):
+        raise RuntimeError("commentCreate returned success=false")
+    comment = payload.get("comment")
+    if not comment:
+        raise RuntimeError("commentCreate returned no comment")
+    return comment
+
+
 def run_create_monthly_release(cfg: MonthlyTicketConfig) -> int:
     """Create the Linear release issue from structured config. Used by CLI and release pipeline."""
     input_path = cfg.input_path
@@ -720,10 +754,17 @@ def run_create_monthly_release(cfg: MonthlyTicketConfig) -> int:
     print(f"Title:          {title}")
     print()
 
+    comment_body = candidate_build_comment_body(stackgen_tag)
+
     if cfg.dry_run:
         print("[DRY RUN] Summary that will be sent:")
         print()
         print(summary)
+        print()
+        print("[DRY RUN] Comment that will be posted after create:")
+        print("-" * 60)
+        print(comment_body)
+        print("-" * 60)
         return 0
 
     if not api_key:
@@ -757,6 +798,11 @@ def run_create_monthly_release(cfg: MonthlyTicketConfig) -> int:
         print(summary)
         print("-" * 60)
         print()
+        print("Post-create comment:")
+        print("-" * 60)
+        print(comment_body)
+        print("-" * 60)
+        print()
 
         issue = create_issue(
             api_key,
@@ -778,6 +824,20 @@ def run_create_monthly_release(cfg: MonthlyTicketConfig) -> int:
         assignee_email = (issue.get("assignee") or {}).get("email")
         if assignee_email:
             print(f"Assignee:   {assignee_email}")
+
+        issue_uuid = str(issue.get("id") or "").strip()
+        if not issue_uuid:
+            print(
+                "⚠️  Ticket created but missing id; skipped candidate-build comment.",
+                file=sys.stderr,
+            )
+            return 0
+
+        comment = create_issue_comment(api_key, issue_uuid, comment_body)
+        print()
+        print("✅ Candidate-build comment added")
+        if comment.get("url"):
+            print(f"Comment URL: {comment.get('url')}")
         return 0
     except Exception as exc:
         print(f"❌ Failed to create ticket: {exc}", file=sys.stderr)

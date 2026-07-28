@@ -174,13 +174,16 @@ make create-release-ticket-only FROM_REF=v2026.7.3 TO_REF=v2026.7.7 DRY_RUN=1
    - `[Weekly release] <STACKGEN_TAG>` or  
    - `[Monthly release] <STACKGEN_TAG>`
 4. Build the issue **description** (see [5.2](#52-issue-description-structure)).
-5. If `DRY_RUN=1`: print title + body and stop.
+5. If `DRY_RUN=1`: print title + body + post-create comment and stop.
 6. Otherwise (requires `LINEAR_API_KEY`):
    1. Resolve assignee (`gaurav@stackgen.com` by default).
    2. Resolve team **HZ**.
    3. Resolve workflow state **Todo**.
    4. Call Linear `issueCreate`.
-   5. Print identifier + URL.
+   5. Post a comment on the new issue:
+      `Candidate build for the coming release <TO_REF>. Cc: @saumya-ctr  @harshit  @gaurav`
+      (`<TO_REF>` is the StackGen/candidate tag passed as `--stackgen-tag`, defaulting from `TO_REF`).
+   6. Print identifier + URL (+ comment confirmation).
 
 ### 5.2 Issue description structure
 
