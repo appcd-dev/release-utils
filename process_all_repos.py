@@ -99,14 +99,35 @@ class RepositoryProcessor:
                 return True
         return False
 
+    # Linear states omitted from aggregated tag-diff ticket outputs.
+    _OMITTED_TICKET_STATES = frozenset({
+        'canceled',
+        'cancelled',
+        'in progress',
+    })
+
     @staticmethod
-    def _is_canceled_ticket(details: Optional[Dict[str, str]]) -> bool:
-        """True when Linear workflow state is Canceled (case-insensitive)."""
+    def _should_omit_ticket(details: Optional[Dict[str, str]]) -> bool:
+        """True when Linear workflow state should be skipped in release artifacts."""
         if not details:
             return False
         state = str(details.get('state') or '').strip().lower()
-        return state in ('canceled', 'cancelled')
-    
+        return state in RepositoryProcessor._OMITTED_TICKET_STATES
+
+    @staticmethod
+    def _priority_sort_rank(priority: object) -> int:
+        """
+        Sort rank for Linear priority values.
+
+        Linear: 0=None, 1=Urgent, 2=High, 3=Medium, 4=Low.
+        Urgent first; no priority last.
+        """
+        try:
+            value = int(priority)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            value = 0
+        return value if value > 0 else 99
+
     def extract_repo_path(self, repo_url: str) -> Optional[str]:
         """
         Extract owner/repo path from GitHub URL.
@@ -632,10 +653,10 @@ class RepositoryProcessor:
         # Fetch Linear details for all unique tickets
         ticket_details_map = self.fetch_all_ticket_details(all_tickets_set)
 
-        # Omit tickets whose Linear state is Canceled from aggregated outputs
+        # Omit tickets in Canceled / In Progress from aggregated outputs
         included_tickets_set = {
             tid for tid in all_tickets_set
-            if not self._is_canceled_ticket(ticket_details_map.get(tid))
+            if not self._should_omit_ticket(ticket_details_map.get(tid))
         }
         
         # Collect unique project IDs from ticket details
@@ -660,9 +681,27 @@ class RepositoryProcessor:
         max_status_len = max(max_status_len, len('Unknown'))
         
         # Build all_tickets array as uniformly formatted strings: "TICKET-ID: status: Summary"
+        # Also persist structured ticket_details (incl. priority) for release-ticket sorting.
         all_tickets = []
+        ticket_details_out: Dict[str, Dict[str, object]] = {}
         for ticket_id in sorted(included_tickets_set):
             details = ticket_details_map.get(ticket_id)
+            if details:
+                try:
+                    priority_value = int(details.get('priority', 0))
+                except (TypeError, ValueError):
+                    priority_value = 0
+                entry: Dict[str, object] = {
+                    'title': details.get('title') or '',
+                    'state': details.get('state') or 'Unknown',
+                    'priority': priority_value,
+                }
+                if details.get('issueUrl'):
+                    entry['issueUrl'] = details['issueUrl']
+                if details.get('fetchHttpStatus'):
+                    entry['fetchHttpStatus'] = details['fetchHttpStatus']
+                ticket_details_out[ticket_id] = entry
+
             if details and str(details.get('fetchHttpStatus')) == '400' and details.get('issueUrl'):
                 all_tickets.append(f"{ticket_id}: {details['issueUrl']}")
             elif details and details.get('title'):
@@ -674,7 +713,7 @@ class RepositoryProcessor:
                 # If no details available, just include the ID
                 all_tickets.append(ticket_id)
         
-        # Group tickets by project (still using IDs for backward compatibility)
+        # Group tickets by project prefix; sort each group by Linear priority.
         tickets_by_project = {}
         for ticket_id in sorted(included_tickets_set):
             prefix = ticket_id.split('-')[0]
@@ -683,7 +722,15 @@ class RepositoryProcessor:
             tickets_by_project[prefix].append(ticket_id)
         
         for prefix in tickets_by_project:
-            tickets_by_project[prefix] = sorted(tickets_by_project[prefix])
+            tickets_by_project[prefix] = sorted(
+                tickets_by_project[prefix],
+                key=lambda tid: (
+                    self._priority_sort_rank(
+                        (ticket_details_map.get(tid) or {}).get('priority', 0)
+                    ),
+                    tid,
+                ),
+            )
         
         # Generate projects list for output
         projects_list = []
@@ -712,6 +759,7 @@ class RepositoryProcessor:
             },
             'services': results,
             'all_tickets': all_tickets,
+            'ticket_details': ticket_details_out,
             'tickets_by_project': tickets_by_project,
             'projects': projects_list
         }

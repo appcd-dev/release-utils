@@ -15,8 +15,12 @@ import requests
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 
-# Ticket prefixes always rendered as their own description sections (in this order).
-PRIMARY_TICKET_SECTIONS = ("AIOS", "DPP", "CORE")
+# Product sections in the release ticket body (order matters).
+PRODUCT_TICKET_SECTIONS = ("Aiden2", "Aiden", "Stackgen Core")
+
+# Service name → product label. Unlisted services fall under "Stackgen Core".
+AIDEN2_SERVICES = frozenset({"stackgen-sre-app", "stackgen-guild"})
+AIDEN_SERVICES = frozenset({"aiden-ui", "aiden"})
 
 
 @dataclass
@@ -55,9 +59,120 @@ LINEAR_ISSUE_BASE = f"https://linear.app/{LINEAR_WORKSPACE}/issue"
 # Noise / non-issue identifiers sometimes extracted from commit text.
 NOISE_TICKET_IDS = frozenset({"UTF-8", "UTF-16", "DEP-02", "INT-03"})
 
+
+def product_label_for_service(service_name: str) -> str:
+    """Map a tag-diff service name to a release-ticket product section."""
+    name = (service_name or "").strip().lower()
+    if name in AIDEN2_SERVICES:
+        return "Aiden2"
+    if name in AIDEN_SERVICES:
+        return "Aiden"
+    return "Stackgen Core"
+
+
+def _normalize_ticket_id(raw: Any) -> str:
+    ticket = str(raw or "").split(":", 1)[0].strip()
+    return ticket
+
+
+def group_tickets_by_product(data: Dict[str, Any]) -> Dict[str, List[str]]:
+    """
+    Group tickets by product label based on which service(s) they appear under:
+
+    - Aiden2: stackgen-sre-app, stackgen-guild
+    - Aiden: aiden-ui, aiden
+    - Stackgen Core: all remaining services
+
+    A ticket that appears under multiple product buckets is assigned once,
+    preferring Aiden2 > Aiden > Stackgen Core.
+    """
+    ticket_labels: Dict[str, set] = {}
+
+    services = data.get("services")
+    if isinstance(services, list):
+        for svc in services:
+            if not isinstance(svc, dict):
+                continue
+            label = product_label_for_service(str(svc.get("service") or ""))
+            for raw in svc.get("tickets") or []:
+                ticket = _normalize_ticket_id(raw)
+                if not ticket or ticket in NOISE_TICKET_IDS:
+                    continue
+                ticket_labels.setdefault(ticket, set()).add(label)
+
+    # Tickets present in the aggregate list but not attached to any service
+    # still belong on the release ticket under Stackgen Core.
+    all_tickets = data.get("all_tickets")
+    if isinstance(all_tickets, list):
+        for item in all_tickets:
+            ticket = _normalize_ticket_id(item)
+            if not ticket or ticket in NOISE_TICKET_IDS or "-" not in ticket:
+                continue
+            ticket_labels.setdefault(ticket, set()).add("Stackgen Core")
+
+    # Fallback when services[] is missing: use tickets_by_project / all_tickets
+    # and put everything under Stackgen Core.
+    if not ticket_labels:
+        grouped_raw = data.get("tickets_by_project")
+        if isinstance(grouped_raw, dict):
+            for ticket_list in grouped_raw.values():
+                if not isinstance(ticket_list, list):
+                    continue
+                for raw in ticket_list:
+                    ticket = _normalize_ticket_id(raw)
+                    if ticket and ticket not in NOISE_TICKET_IDS:
+                        ticket_labels.setdefault(ticket, set()).add("Stackgen Core")
+
+    grouped: Dict[str, List[str]] = {section: [] for section in PRODUCT_TICKET_SECTIONS}
+    for ticket, labels in ticket_labels.items():
+        for section in PRODUCT_TICKET_SECTIONS:
+            if section in labels:
+                grouped[section].append(ticket)
+                break
+
+    for section in grouped:
+        # De-dupe only here; priority sort is applied in load_release_data.
+        grouped[section] = list(dict.fromkeys(grouped[section]))
+    return grouped
+
 # process_all_repos.py formats all_tickets as: "TICKET-ID : status : title"
 _TICKET_WITH_META = re.compile(r"^(\S+)\s*:\s*(.+?)\s*:\s*(.+)$", re.DOTALL)
 _TICKET_ID_ONLY = re.compile(r"^([A-Za-z]+-\d+)$")
+
+# Linear priority: 0=None, 1=Urgent, 2=High, 3=Medium, 4=Low.
+# Sort Urgent → High → Medium → Low → None.
+_PRIORITY_NONE_RANK = 99
+
+
+def priority_sort_rank(priority: Any) -> int:
+    """Map Linear priority to ascending sort rank (Urgent first, none last)."""
+    try:
+        value = int(priority)
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else _PRIORITY_NONE_RANK
+
+
+def parse_ticket_priority(raw: Any) -> int:
+    """Normalize a Linear priority value to int (0 when missing/invalid)."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+def sort_tickets_by_priority(
+    tickets: List[str],
+    ticket_meta: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    """Stable priority order within a project/product section; tie-break by id."""
+    return sorted(
+        tickets,
+        key=lambda tid: (
+            priority_sort_rank((ticket_meta.get(tid) or {}).get("priority", 0)),
+            tid,
+        ),
+    )
 
 
 def parse_ticket_line(line: str) -> Tuple[str, str, str]:
@@ -78,25 +193,42 @@ def parse_ticket_line(line: str) -> Tuple[str, str, str]:
     return line_stripped, "", ""
 
 
-def ticket_meta_from_all_tickets(data: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
-    """Map ticket id -> {title, state} from `all_tickets` strings."""
-    meta: Dict[str, Dict[str, str]] = {}
+def ticket_meta_from_all_tickets(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """
+    Map ticket id -> {title, state, priority} from artifact fields.
+
+    Prefers structured `ticket_details` (includes Linear priority). Falls back to
+    parsing `all_tickets` strings (priority defaults to 0 when absent).
+    """
+    meta: Dict[str, Dict[str, Any]] = {}
     raw_entries = data.get("all_tickets")
-    if not isinstance(raw_entries, list):
-        return meta
-    for raw_line in raw_entries:
-        if not isinstance(raw_line, str):
-            continue
-        ticket_id, state, title = parse_ticket_line(raw_line)
-        if ticket_id:
-            meta[ticket_id] = {"title": title, "state": state}
+    if isinstance(raw_entries, list):
+        for raw_line in raw_entries:
+            if not isinstance(raw_line, str):
+                continue
+            ticket_id, state, title = parse_ticket_line(raw_line)
+            if ticket_id:
+                meta[ticket_id] = {"title": title, "state": state, "priority": 0}
+
+    details_raw = data.get("ticket_details")
+    if isinstance(details_raw, dict):
+        for ticket_id, details in details_raw.items():
+            tid = str(ticket_id or "").strip()
+            if not tid or not isinstance(details, dict):
+                continue
+            existing = meta.get(tid) or {}
+            meta[tid] = {
+                "title": str(details.get("title") or existing.get("title") or ""),
+                "state": str(details.get("state") or existing.get("state") or ""),
+                "priority": parse_ticket_priority(details.get("priority", 0)),
+            }
     return meta
 
 
 def ticket_summaries_from_all_tickets(data: Dict[str, Any]) -> Dict[str, str]:
     """Map ticket id -> title/summary from `all_tickets` strings (see process_all_repos)."""
     return {
-        ticket_id: details.get("title", "")
+        ticket_id: str(details.get("title", "") or "")
         for ticket_id, details in ticket_meta_from_all_tickets(data).items()
     }
 
@@ -225,66 +357,21 @@ def load_release_data(
     services_input_path: Optional[Path] = None,
 ) -> Tuple[
     Dict[str, List[str]],
-    Dict[str, Dict[str, str]],
+    Dict[str, Dict[str, Any]],
     List[Dict[str, Any]],
     List[Dict[str, Any]],
 ]:
-    """Load tickets_by_project, ticket meta, RC tag rows (all services), and projects."""
+    """Load product-grouped tickets, ticket meta, RC tag rows, and projects."""
     with input_path.open("r", encoding="utf-8") as f:
         data = json.load(f)
 
     ticket_meta = ticket_meta_from_all_tickets(data)
     rc_rows = load_release_candidate_rows(input_path, services_input_path)
     projects = all_linear_projects(data)
-
-    grouped = data.get("tickets_by_project")
-    if isinstance(grouped, dict) and grouped:
-        by_prefix: Dict[str, List[str]] = {}
-        for prefix, ticket_list in grouped.items():
-            if isinstance(ticket_list, list):
-                by_prefix[prefix] = sorted(
-                    {
-                        str(x)
-                        for x in ticket_list
-                        if x and str(x) not in NOISE_TICKET_IDS
-                    }
-                )
-        return (
-            dict(sorted(by_prefix.items(), key=lambda kv: kv[0])),
-            ticket_meta,
-            rc_rows,
-            projects,
-        )
-
-    derived: Dict[str, List[str]] = {}
-    all_tickets = data.get("all_tickets", [])
-    if isinstance(all_tickets, list):
-        for item in all_tickets:
-            ticket = str(item).split(":", 1)[0].strip()
-            if ticket in NOISE_TICKET_IDS:
-                continue
-            if "-" in ticket:
-                proj = ticket.split("-", 1)[0]
-                derived.setdefault(proj, []).append(ticket)
-
-    if not derived and isinstance(data.get("services"), list):
-        for service in data["services"]:
-            for t in service.get("tickets", []):
-                ticket = str(t)
-                if ticket in NOISE_TICKET_IDS:
-                    continue
-                if "-" in ticket:
-                    proj = ticket.split("-", 1)[0]
-                    derived.setdefault(proj, []).append(ticket)
-
-    for proj in list(derived.keys()):
-        derived[proj] = sorted(set(derived[proj]))
-    return (
-        dict(sorted(derived.items(), key=lambda kv: kv[0])),
-        ticket_meta,
-        rc_rows,
-        projects,
-    )
+    grouped = group_tickets_by_product(data)
+    for section, tickets in grouped.items():
+        grouped[section] = sort_tickets_by_priority(tickets, ticket_meta)
+    return grouped, ticket_meta, rc_rows, projects
 
 
 def read_grouped_tickets(input_path: Path) -> Dict[str, List[str]]:
@@ -302,10 +389,10 @@ def _md_cell(text: str) -> str:
     return (text or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
-def _ticket_table_row(ticket_id: str, meta: Dict[str, Dict[str, str]]) -> str:
+def _ticket_table_row(ticket_id: str, meta: Dict[str, Dict[str, Any]]) -> str:
     details = meta.get(ticket_id) or {}
-    title = _md_cell(details.get("title") or "")
-    state = _md_cell(details.get("state") or "—") or "—"
+    title = _md_cell(str(details.get("title") or ""))
+    state = _md_cell(str(details.get("state") or "—")) or "—"
     link = f"[{ticket_id}]({linear_issue_url(ticket_id)})"
     return f"| {link} | {state} | {title or '—'} |"
 
@@ -313,7 +400,7 @@ def _ticket_table_row(ticket_id: str, meta: Dict[str, Dict[str, str]]) -> str:
 def _append_ticket_table(
     lines: List[str],
     tickets: List[str],
-    ticket_meta: Dict[str, Dict[str, str]],
+    ticket_meta: Dict[str, Dict[str, Any]],
 ) -> None:
     lines.append("| ID | Status | Summary |")
     lines.append("| --- | --- | --- |")
@@ -326,7 +413,7 @@ def _append_ticket_section(
     lines: List[str],
     heading: str,
     tickets: List[str],
-    ticket_meta: Dict[str, Dict[str, str]],
+    ticket_meta: Dict[str, Dict[str, Any]],
 ) -> None:
     lines.append(f"## {heading}")
     lines.append("")
@@ -335,10 +422,11 @@ def _append_ticket_section(
         lines.append("")
         return
 
+    # Preserve caller priority order within Features / Bug fixes splits.
     features = []
     bugs = []
     for ticket_id in tickets:
-        title = (ticket_meta.get(ticket_id) or {}).get("title", "")
+        title = str((ticket_meta.get(ticket_id) or {}).get("title", "") or "")
         if _is_bug_like(title):
             bugs.append(ticket_id)
         else:
@@ -363,7 +451,7 @@ def build_summary(
     stackgen_tag: str = "",
     rc_tag_lines: Optional[List[str]] = None,
     projects: Optional[List[Dict[str, Any]]] = None,
-    ticket_meta: Optional[Dict[str, Dict[str, str]]] = None,
+    ticket_meta: Optional[Dict[str, Dict[str, Any]]] = None,
     rc_rows: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """
@@ -371,7 +459,7 @@ def build_summary(
 
     - Partitioned sections with ---
     - Component tag table (from → to)
-    - Ticket tables: ID (link) | Status | Summary
+    - Ticket tables: ID (link) | Status | Summary (priority-sorted within each section)
     - Project lists with Linear hyperlinks + state/progress
     """
     _ = (ticket_id_to_summary, in_progress_projects, rc_tag_lines)
@@ -439,28 +527,12 @@ def build_summary(
     lines.append("---")
     lines.append("")
 
-    # --- Primary team ticket sections ---
-    for prefix in PRIMARY_TICKET_SECTIONS:
-        tickets = grouped.get(prefix, [])
+    # --- Product ticket sections (by service) ---
+    for section in PRODUCT_TICKET_SECTIONS:
+        tickets = grouped.get(section, [])
         _append_ticket_section(
-            lines, f"{prefix} ({len(tickets)})", tickets, ticket_meta
+            lines, f"{section} ({len(tickets)})", tickets, ticket_meta
         )
-        lines.append("---")
-        lines.append("")
-
-    # --- Other prefixes ---
-    other_prefixes = [
-        p for p in sorted(grouped.keys())
-        if p not in PRIMARY_TICKET_SECTIONS and grouped.get(p)
-    ]
-    if other_prefixes:
-        lines.append("## Other teams")
-        lines.append("")
-        for prefix in other_prefixes:
-            tickets = grouped[prefix]
-            lines.append(f"### {prefix} ({len(tickets)})")
-            lines.append("")
-            _append_ticket_table(lines, tickets, ticket_meta)
         lines.append("---")
         lines.append("")
 
@@ -632,6 +704,7 @@ def create_issue(
     team_id: str,
     state_id: Optional[str] = None,
     template_id: str = "",
+    parent_id: str = "",
 ) -> Dict[str, Any]:
     mutation = """
     mutation IssueCreate($input: IssueCreateInput!) {
@@ -650,6 +723,8 @@ def create_issue(
     }
     if state_id:
         base["stateId"] = state_id
+    if parent_id:
+        base["parentId"] = parent_id
 
     candidate_inputs: List[Dict[str, Any]] = []
     if template_id:
@@ -675,8 +750,50 @@ def create_issue(
     raise RuntimeError(f"Failed creating Linear issue: {last_error}")
 
 
+# Subtickets created under the main release issue (same assignee / team / state).
+AIDEN2_SUBTICKET_SUFFIXES = (
+    "Automation Runs",
+    "Validation",
+    "Aiden2 Changelog",
+)
+
+
+def aiden2_subticket_titles(release_kind: str, release_tag: str) -> List[str]:
+    """Titles for Aiden2 release follow-up subtickets."""
+    kind = (release_kind or "weekly").strip().lower()
+    kind_label = "Weekly" if kind == "weekly" else "Monthly"
+    tag = (release_tag or "").strip() or "unknown"
+    prefix = f"[Aiden2][{kind_label} Release {tag}]"
+    return [f"{prefix} {suffix}" for suffix in AIDEN2_SUBTICKET_SUFFIXES]
+
+
+def create_aiden2_subtickets(
+    api_key: str,
+    parent_id: str,
+    release_kind: str,
+    release_tag: str,
+    assignee_id: str,
+    team_id: str,
+    state_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Create the three Aiden2 subtickets under the parent release issue."""
+    created: List[Dict[str, Any]] = []
+    for title in aiden2_subticket_titles(release_kind, release_tag):
+        issue = create_issue(
+            api_key,
+            title=title,
+            summary="",
+            assignee_id=assignee_id,
+            team_id=team_id,
+            state_id=state_id,
+            parent_id=parent_id,
+        )
+        created.append(issue)
+    return created
+
+
 # Handles mentioned on the candidate-build comment after ticket create.
-CANDIDATE_BUILD_CC_HANDLES = ("saumya-ctr", "harshit", "gaurav")
+CANDIDATE_BUILD_CC_HANDLES = ("saumya-ctr", "abhishes", "cesar")
 
 
 def candidate_build_comment_body(release_id: str) -> str:
@@ -755,6 +872,7 @@ def run_create_monthly_release(cfg: MonthlyTicketConfig) -> int:
     print()
 
     comment_body = candidate_build_comment_body(stackgen_tag)
+    subticket_titles = aiden2_subticket_titles(release_kind, stackgen_tag)
 
     if cfg.dry_run:
         print("[DRY RUN] Summary that will be sent:")
@@ -764,6 +882,13 @@ def run_create_monthly_release(cfg: MonthlyTicketConfig) -> int:
         print("[DRY RUN] Comment that will be posted after create:")
         print("-" * 60)
         print(comment_body)
+        print("-" * 60)
+        print()
+        print("[DRY RUN] Aiden2 subtickets that will be created under the release ticket:")
+        print("-" * 60)
+        for sub_title in subticket_titles:
+            print(f"  - {sub_title}")
+        print(f"  Assignee: {cfg.assignee_query}")
         print("-" * 60)
         return 0
 
@@ -803,6 +928,13 @@ def run_create_monthly_release(cfg: MonthlyTicketConfig) -> int:
         print(comment_body)
         print("-" * 60)
         print()
+        print("Aiden2 subtickets (parent = release ticket):")
+        print("-" * 60)
+        for sub_title in subticket_titles:
+            print(f"  - {sub_title}")
+        print(f"  Assignee: {cfg.assignee_query}")
+        print("-" * 60)
+        print()
 
         issue = create_issue(
             api_key,
@@ -828,7 +960,7 @@ def run_create_monthly_release(cfg: MonthlyTicketConfig) -> int:
         issue_uuid = str(issue.get("id") or "").strip()
         if not issue_uuid:
             print(
-                "⚠️  Ticket created but missing id; skipped candidate-build comment.",
+                "⚠️  Ticket created but missing id; skipped comment and subtickets.",
                 file=sys.stderr,
             )
             return 0
@@ -838,6 +970,23 @@ def run_create_monthly_release(cfg: MonthlyTicketConfig) -> int:
         print("✅ Candidate-build comment added")
         if comment.get("url"):
             print(f"Comment URL: {comment.get('url')}")
+
+        subtickets = create_aiden2_subtickets(
+            api_key,
+            parent_id=issue_uuid,
+            release_kind=release_kind,
+            release_tag=stackgen_tag,
+            assignee_id=assignee_id,
+            team_id=team_id,
+            state_id=state_id,
+        )
+        print()
+        print(f"✅ Created {len(subtickets)} Aiden2 subticket(s)")
+        for child in subtickets:
+            print(
+                f"  - {child.get('identifier')}: {child.get('title')} "
+                f"({child.get('url')})"
+            )
         return 0
     except Exception as exc:
         print(f"❌ Failed to create ticket: {exc}", file=sys.stderr)

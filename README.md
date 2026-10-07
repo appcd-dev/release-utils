@@ -115,7 +115,8 @@ Executed **in order**:
 | Title | `[Weekly release] <TO_REF>` or `[Monthly release] <TO_REF>` |
 | Assignee | `gaurav@stackgen.com` |
 | Status | `Todo` |
-| Body | Release Candidate Tags (all services) · AIOS / DPP / CORE tables (linked ID, status, summary) · other teams · Projects (linked) |
+| Body | Release Candidate Tags (all services) · Aiden2 / Aiden / Stackgen Core tables (linked ID, status, summary) · Projects (linked) |
+| Subtickets | Three Aiden2 children under the release issue: Automation Runs, Validation, Aiden2 Changelog (same assignee) |
 
 ### Artifact directory layout
 

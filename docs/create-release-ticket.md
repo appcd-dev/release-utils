@@ -133,11 +133,12 @@ This file is the **source of truth** for “what versions are in this candidate.
    1. Call GitHub compare between `current_tag` and `new_tag`.
    2. Collect commit messages / PR text.
    3. Extract Linear ticket identifiers (e.g. `AIOS-273`, `CORE-1003`).
-   4. Optionally resolve each ticket via Linear API (title, state, project).
+   4. Optionally resolve each ticket via Linear API (title, state, priority, project).
 4. Aggregate:
    - Per-service ticket lists  
    - Unique tickets across the release (`all_tickets`)  
-   - Tickets grouped by project prefix (`tickets_by_project`)  
+   - Structured per-ticket meta including Linear priority (`ticket_details`)  
+   - Tickets grouped by team prefix (`tickets_by_project`), each group sorted by priority (Urgent → High → Medium → Low → None)  
    - Related Linear projects (`projects`)  
 5. Write:
    - `OUT_DIR/final_tag_differences.json` — primary inventory for the ticket body  
@@ -148,7 +149,7 @@ This file is the **source of truth** for “what versions are in this candidate.
 
 | Artifact | Use |
 |----------|-----|
-| `final_tag_differences.json` | Ticket inventory, states, projects |
+| `final_tag_differences.json` | Ticket inventory, states, priorities, projects |
 | `input.json` | Full component version table (changed + unchanged) |
 | Commit diff log | Deep dive / format debugging |
 
@@ -174,16 +175,21 @@ make create-release-ticket-only FROM_REF=v2026.7.3 TO_REF=v2026.7.7 DRY_RUN=1
    - `[Weekly release] <STACKGEN_TAG>` or  
    - `[Monthly release] <STACKGEN_TAG>`
 4. Build the issue **description** (see [5.2](#52-issue-description-structure)).
-5. If `DRY_RUN=1`: print title + body + post-create comment and stop.
+5. If `DRY_RUN=1`: print title + body + post-create comment + Aiden2 subticket titles and stop.
 6. Otherwise (requires `LINEAR_API_KEY`):
    1. Resolve assignee (`gaurav@stackgen.com` by default).
    2. Resolve team **HZ**.
    3. Resolve workflow state **Todo**.
-   4. Call Linear `issueCreate`.
+   4. Call Linear `issueCreate` for the main release ticket.
    5. Post a comment on the new issue:
-      `Candidate build for the coming release <TO_REF>. Cc: @saumya-ctr  @harshit  @gaurav`
+      `Candidate build for the coming release <TO_REF>. Cc: @saumya-ctr  @abhishes  @cesar`
       (`<TO_REF>` is the StackGen/candidate tag passed as `--stackgen-tag`, defaulting from `TO_REF`).
-   6. Print identifier + URL (+ comment confirmation).
+   6. Create three Aiden2 subtickets under the release ticket (same assignee / team / status):
+      - `[Aiden2][Weekly Release <TO_REF>] Automation Runs`
+      - `[Aiden2][Weekly Release <TO_REF>] Validation`
+      - `[Aiden2][Weekly Release <TO_REF>] Aiden2 Changelog`
+      (For monthly releases the middle label is `Monthly Release`.)
+   7. Print identifier + URL (+ comment + subticket confirmation).
 
 ### 5.2 Issue description structure
 
@@ -194,13 +200,14 @@ Sections appear in this order, separated by horizontal rules:
    - Columns: Component | From | To | Change  
    - Changed rows listed first and marked **Updated** (bold; Linear has no text color)  
    - Unchanged rows show the same tag in From and To  
-3. **AIOS** — table: ID (hyperlink) | Status | Summary  
-4. **DPP** — same table format  
-5. **CORE** — same table format  
-6. **Other teams** — ENG, PLAT, PRO, … when present (same table format)  
-7. **Projects** — table: Project (hyperlink) | State | Progress  
+3. **Aiden2** — tickets from `stackgen-sre-app` + `stackgen-guild`  
+   Table: ID (hyperlink) | Status | Summary  
+   Tickets sorted by Linear priority (Urgent → High → Medium → Low → None)  
+4. **Aiden** — tickets from `aiden-ui` + `aiden` (same table format + priority sort)  
+5. **Stackgen Core** — tickets from all remaining services (same table format + priority sort)  
+6. **Projects** — table: Project (hyperlink) | State | Progress  
 
-Where Features and Bug fixes can be distinguished, AIOS/DPP/CORE may split into those subsections before the tables.
+Where Features and Bug fixes can be distinguished, product sections may split into those subsections before the tables (priority order is preserved within each subsection).
 
 ### 5.3 Linear issue fields written
 
@@ -211,6 +218,18 @@ Where Features and Bug fixes can be distinguished, AIOS/DPP/CORE may split into 
 | Assignee | `gaurav@stackgen.com` |
 | Status | `Todo` |
 | Description | Partitioned markdown with linked tickets and projects |
+
+### 5.4 Aiden2 subtickets
+
+After the main release issue is created, three child issues are opened on the same team with the same assignee and status:
+
+| Title pattern | Purpose |
+|---------------|---------|
+| `[Aiden2][Weekly Release <tag>] Automation Runs` | Automation run tracking for the cut |
+| `[Aiden2][Weekly Release <tag>] Validation` | Validation work for the cut |
+| `[Aiden2][Weekly Release <tag>] Aiden2 Changelog` | Aiden2 changelog write-up |
+
+`<tag>` is `STACKGEN_TAG` / `TO_REF`. For monthly releases, `Weekly` becomes `Monthly`.
 
 ---
 
