@@ -26,57 +26,17 @@ import requests
 
 # Service to version key and repository mapping
 SERVICE_VERSION_MAP = {
-    "ui": {
-        "version_key": "APPCDUI_VERSION",
-        "repository": "https://github.com/appcd-dev/appcd-ui"
-    },
-    "appcd": {
-        "version_key": "APPCD_VERSION",
-        "repository": "https://github.com/appcd-dev/appcd"
-    },
-    "iac-gen": {
-        "version_key": "IACGEN_VERSION",
-        "repository": "https://github.com/appcd-dev/iac-gen"
-    },
-    "exporter": {
-        "version_key": "STACK_EXPORTER_VERSION",
-        "repository": "https://github.com/appcd-dev/stack-exporter"
-    },
-    "vault": {
-        "version_key": "STACKGEN_VAULT_VERSION",
-        "repository": "https://github.com/appcd-dev/stackgen-vault"
-    },
-    "integrations": {
-        "version_key": "INTEGRATIONS_VERSION",
-        "repository": "https://github.com/appcd-dev/integrations"
+    "infraops": {
+        "version_key": "INFRAOPS",
+        "repository": "https://github.com/appcd-dev/infraops"
     },
     "backstage-adapter": {
         "version_key": "BACKSTAGE_ADAPTER_VERSION",
         "repository": "https://github.com/appcd-dev/backstage-adapter"
     },
-    "infra-catalog-tracker": {
-        "version_key": "INFRA_CATALOG_TRACKER_VERSION",
-        "repository": "https://github.com/appcd-dev/infra-catalog-tracker"
-    },
     "sgai-orchestration": {
         "version_key": "SGAI_ORCHESTRATION",
         "repository": "https://github.com/appcd-dev/sgai-orchestration"
-    },
-    "deployment-manager": {
-        "version_key": "DEPLOYMENT_MANAGER_VERSION",
-        "repository": "https://github.com/appcd-dev/deployment-manager"
-    },
-    "notifications": {
-        "version_key": "STACKGEN_NOTIFICATION",
-        "repository": "https://github.com/appcd-dev/stackgen-notification"
-    },
-    "tf-module-service": {
-        "version_key": "TF_MODULE_SERVICE_VERSION",
-        "repository": "https://github.com/appcd-dev/tf-module-service"
-    },
-    "audit-manager": {
-        "version_key": "AUDIT_MANAGER_VERSION",
-        "repository": "https://github.com/appcd-dev/audit-manager"
     },
     "aiden": {
         "version_key": "AIDEN_VERSION",
