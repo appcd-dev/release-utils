@@ -43,6 +43,9 @@ class RepositoryProcessor:
         self.verbose = verbose
         self.fetch_linear_details = fetch_linear_details
         self.commit_diff_log_path = commit_diff_log_path
+        # Cache compare_tags output by (repo, from, to) so infraops-backed
+        # services that share the same tag pair only hit GitHub once.
+        self._compare_cache: Dict[tuple, str] = {}
         # Match ticket IDs: [PROJ-123] or PROJ-123 at word boundary (e.g. "PLAT-1794 |", "OPS-219:")
         self.ticket_pattern = re.compile(
             r'\[([A-Z]{2,6}-\d{1,6})\]'
@@ -163,6 +166,12 @@ class RepositoryProcessor:
         Returns:
             Output from compare_tags.py as string
         """
+        cache_key = (repo, from_tag, to_tag)
+        if cache_key in self._compare_cache:
+            if self.verbose:
+                print(f"     ♻️  Reusing cached compare for {repo} ({from_tag} → {to_tag})")
+            return self._compare_cache[cache_key]
+
         cmd = [
             sys.executable,
             'compare_tags.py',
@@ -183,18 +192,22 @@ class RepositoryProcessor:
             if result.returncode != 0:
                 if self.verbose:
                     print(f"  ⚠️  Warning: compare_tags.py returned error: {result.stderr}", file=sys.stderr)
+                self._compare_cache[cache_key] = ""
                 return ""
             
+            self._compare_cache[cache_key] = result.stdout
             return result.stdout
             
         except subprocess.TimeoutExpired:
             print(f"  ⚠️  Warning: Timeout fetching changes for {repo}", file=sys.stderr)
+            self._compare_cache[cache_key] = ""
             return ""
         except FileNotFoundError:
             print("Error: compare_tags.py not found", file=sys.stderr)
             return ""
         except Exception as e:
             print(f"  ⚠️  Warning: Error calling compare_tags.py for {repo}: {e}", file=sys.stderr)
+            self._compare_cache[cache_key] = ""
             return ""
     
     def extract_tickets_from_text(self, text: str) -> Set[str]:

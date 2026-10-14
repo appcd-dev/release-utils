@@ -20,7 +20,7 @@ from typing import Dict, Optional
 
 import requests
 
-from generate_input_json import SERVICE_VERSION_MAP
+from generate_input_json import SERVICE_VERSION_MAP, resolve_env_version_tag
 
 
 DEFAULT_REPO = "appcd-dev/appcd-dist"
@@ -82,13 +82,16 @@ def build_input(from_env: Dict[str, str], to_env: Dict[str, str]) -> list:
     rows = []
     for service_name, service_info in SERVICE_VERSION_MAP.items():
         version_key = service_info["version_key"]
+        repository = service_info["repository"]
         rows.append(
             {
                 "service": service_name,
-                "repository": service_info["repository"],
+                "repository": repository,
                 "version_key": version_key,
-                "current_tag": from_env.get(version_key, ""),
-                "new_tag": to_env.get(version_key, ""),
+                "current_tag": resolve_env_version_tag(
+                    from_env, version_key, repository
+                ),
+                "new_tag": resolve_env_version_tag(to_env, version_key, repository),
             }
         )
     return rows
