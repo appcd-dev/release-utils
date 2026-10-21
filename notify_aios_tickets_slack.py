@@ -632,7 +632,8 @@ def post_thread(
             {"channel": channel, "message_ts": thread_ts},
         )
         permalink = str(link.get("permalink") or "")
-    except Exception:
+    except Exception as exc:
+        print(f"⚠️  Could not fetch Slack permalink: {exc}", file=sys.stderr)
         pass
     return thread_ts, permalink
 
