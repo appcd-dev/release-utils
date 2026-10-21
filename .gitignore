@@ -10,10 +10,42 @@ build/
 .env.*
 !.env.example
 
+# Stage QA rerun secrets (keep *.example.yaml tracked)
+**/release-information/STAGE_RERUN_INPUT.yaml
+**/STAGE_RERUN_INPUT.yaml
+!**/STAGE_RERUN_INPUT.example.yaml
+**/release-information/_STAGE_RERUN_INPUT.json
+
 # Generated tag-diff outputs (regenerate with make or run_monthly_release.py)
 generated_files/
+
+# Local release artifact dirs / scratch (do not commit)
+v20*/
+Jun*/
+june*/
+generated_files_*/
+.pr-compare/
+node_modules/
+test-results/
+guild-api-suite/
+guild-ui-suite/
+release-changelog-generator/
+release-changelog-generator.zip
+*.zip
+package-lock.json
 
 # OS / editor
 .DS_Store
 .idea/
 .vscode/
+
+# Local scratch / experiments (not part of the shipped tooling)
+civo_inventory.py
+debug_linear_issue_fetch.py
+generate_mar_april_pdf.py
+generate_whats_new_pdf.py
+linear_issue_web_resolve.py
+linear_redirect_debug.spec.ts
+package.json
+prompts/
+docs/release-qa-agentic-flow.md

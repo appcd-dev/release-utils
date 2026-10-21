@@ -91,7 +91,15 @@ def run_monthly_release_pipeline(
     if not skip_ticket and resolved_ticket_config is None:
         resolved_ticket_config = MonthlyTicketConfig(
             input_path=config.final_tag_differences_path(root_path),
+            release_kind="weekly",
+            stackgen_tag=stackgen_tag.strip(),
         )
+    elif (
+        not skip_ticket
+        and resolved_ticket_config is not None
+        and not (resolved_ticket_config.stackgen_tag or "").strip()
+    ):
+        resolved_ticket_config.stackgen_tag = stackgen_tag.strip()
 
     step_results: List[StepResult] = []
 
