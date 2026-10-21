@@ -708,6 +708,7 @@ class RepositoryProcessor:
                     'title': details.get('title') or '',
                     'state': details.get('state') or 'Unknown',
                     'priority': priority_value,
+                    'assignee': details.get('assignee') or 'Unassigned',
                 }
                 if details.get('issueUrl'):
                     entry['issueUrl'] = details['issueUrl']

@@ -64,6 +64,14 @@ The target runs these four steps **in order**:
 | 3 | Fetch commits, tickets, and projects | [4. Fetch changes](#4-fetch_changes_between_tags_from_input) |
 | 4 | Create the Linear release ticket | [5. Create Linear ticket](#5-create-release-ticket-only--linear-issue) |
 
+Slack AIOS notify is **not** part of this pipeline. Run it separately when needed:
+
+```bash
+make notify-aios-tickets FROM_REF=v2026.7.3 TO_REF=v2026.7.7
+```
+
+See [slack-aios-notify.md](./slack-aios-notify.md).
+
 ### 1.3 Artifact layout produced by this run
 
 All outputs for a given from→to pair live under one directory:

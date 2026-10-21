@@ -1,4 +1,4 @@
-.PHONY: help setup generate-input generate-input-custom generate-custom-input-file fetch_changes_between_tags_from_input clean test-linear monthly-release monthly-release-no-ticket create-release-ticket create-release-ticket-only
+.PHONY: help setup generate-input generate-input-custom generate-custom-input-file fetch_changes_between_tags_from_input clean test-linear monthly-release monthly-release-no-ticket create-release-ticket create-release-ticket-only update-ticket-statuses notify-aios-tickets
 
 # Configuration
 PYTHON := python3
@@ -42,6 +42,9 @@ help:
 	@echo "                                             - artifacts under <FROM_REF>-<TO_REF>/"
 	@echo "  make create-release-ticket-only FROM_REF=<ref> TO_REF=<ref>"
 	@echo "                                             - Create Linear ticket from <FROM_REF>-<TO_REF>/ artifacts"
+	@echo "  make update-ticket-statuses ISSUE=<id>     - Refresh Status columns on a Linear release issue"
+	@echo "  make notify-aios-tickets FROM_REF=<ref> TO_REF=<ref>"
+	@echo "                                             - Slack #guild-engineering-only: AIOS tickets (guild+sre)"
 	@echo "  make full-workflow                         - Run complete workflow (generate + process)"
 	@echo "  make test-linear                           - Test Linear API connection"
 	@echo "  make clean                                 - Remove generated_files/ (or GENERATED_DIR=…)"
@@ -62,10 +65,24 @@ help:
 	@echo "  OUT_DIR           optional — artifact dir (default: <FROM_REF>-<TO_REF>)"
 	@echo "  DRY_RUN=1         optional — preview Linear body only (skip issueCreate)"
 	@echo ""
+	@echo "notify-aios-tickets parameters:"
+	@echo "  FROM_REF / TO_REF required — reads <FROM_REF>-<TO_REF>/final_tag_differences.json"
+	@echo "  SLACK_BOT_TOKEN   required in .env (unless DRY_RUN=1)"
+	@echo "  SLACK_CHANNEL     optional — default guild-engineering-only"
+	@echo "  DRY_RUN=1         optional — print parent+thread only"
+	@echo "  See docs/slack-aios-notify.md for Slack app setup"
+	@echo ""
+	@echo "update-ticket-statuses parameters:"
+	@echo "  ISSUE             required — Linear issue id (e.g. HZ-809)"
+	@echo "  DRY_RUN=1         optional — print status diffs only (skip issueUpdate)"
+	@echo "  REFRESH_TITLES=1  optional — also refresh Summary from Linear titles"
+	@echo ""
 	@echo "Example:"
 	@echo "  make create-release-ticket FROM_REF=v2026.7.3 TO_REF=v2026.7.7 MONTH_LABEL=\"July 2026\""
 	@echo "  # writes to v2026.7.3-v2026.7.7/"
 	@echo "  make create-release-ticket FROM_REF=v2026.7.3 TO_REF=v2026.7.7 DRY_RUN=1"
+	@echo "  make notify-aios-tickets FROM_REF=v2026.7.3 TO_REF=v2026.7.7 DRY_RUN=1"
+	@echo "  make update-ticket-statuses ISSUE=HZ-809 DRY_RUN=1"
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -266,6 +283,7 @@ monthly-release-no-ticket:
 # Full weekly/monthly release ticket pipeline:
 #   clean OUT_DIR → generate-custom-input-file → fetch_changes → Linear ticket
 # Artifacts written to OUT_DIR (default: <FROM_REF>-<TO_REF>/), e.g. v2026.7.3-v2026.7.7/
+# Slack AIOS notify is separate: make notify-aios-tickets FROM_REF=… TO_REF=…
 #
 # Required: FROM_REF TO_REF
 # Optional: OUT_DIR, STACKGEN_TAG, RELEASE_KIND, MONTH_LABEL, ASSIGNEE_QUERY, STATE_NAME, DRY_RUN=1
@@ -329,7 +347,33 @@ create-release-ticket:
 	echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; \
 	echo "✅ create-release-ticket pipeline finished"; \
 	echo "   Artifacts: $$out_dir/"; \
+	echo "   Optional: make notify-aios-tickets FROM_REF=$(FROM_REF) TO_REF=$(TO_REF)"; \
 	echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Post AIOS tickets (stackgen-guild + stackgen-sre-app) to Slack as parent + thread.
+#   make notify-aios-tickets FROM_REF=v2026.9.14 TO_REF=v2026.10.1
+#   make notify-aios-tickets FROM_REF=v2026.9.14 TO_REF=v2026.10.1 DRY_RUN=1
+# Requires SLACK_BOT_TOKEN in .env (see docs/slack-aios-notify.md).
+notify-aios-tickets:
+	@if [ -z "$(TO_REF)" ]; then \
+		echo "❌ TO_REF is required."; \
+		echo "Usage: make notify-aios-tickets FROM_REF=<base> TO_REF=<candidate> [DRY_RUN=1]"; \
+		exit 1; \
+	fi
+	@from_safe=$$(printf '%s' "$(FROM_REF)" | sed 's|[/ :]|-|g'); \
+	to_safe=$$(printf '%s' "$(TO_REF)" | sed 's|[/ :]|-|g'); \
+	out_dir="$(GENERATED_DIR)"; \
+	if [ -n "$(OUT_DIR)" ]; then out_dir="$(OUT_DIR)"; fi; \
+	if [ "$$out_dir" = "generated_files" ] && [ -n "$(FROM_REF)" ] && [ -n "$(TO_REF)" ]; then \
+		out_dir="$${from_safe}-$${to_safe}"; \
+	fi; \
+	EXTRA="--to-ref $(TO_REF) --generated-dir $$out_dir"; \
+	if [ -n "$(FROM_REF)" ]; then EXTRA="$$EXTRA --from-ref $(FROM_REF)"; fi; \
+	if [ -n "$(SLACK_CHANNEL)" ]; then EXTRA="$$EXTRA --channel $(SLACK_CHANNEL)"; fi; \
+	if [ "$(DRY_RUN)" = "1" ]; then EXTRA="$$EXTRA --dry-run"; fi; \
+	if [ "$(SKIP_IF_NO_TOKEN)" = "1" ]; then EXTRA="$$EXTRA --skip-if-no-token"; fi; \
+	echo "Notifying AIOS tickets from $$out_dir/final_tag_differences.json → Slack…"; \
+	eval $(PYTHON) notify_aios_tickets_slack.py $$EXTRA
 
 # Create HZ Linear release ticket from existing tag-diff artifacts only.
 #
@@ -364,6 +408,22 @@ create-release-ticket-only:
 	if [ -f "$$services_input" ]; then EXTRA="$$EXTRA --services-input \"$$services_input\""; fi; \
 	echo "Creating Linear ticket from $$output_file (tag=$$tag)…"; \
 	eval $(PYTHON) create_monthly_release_ticket.py --input "$$output_file" $$EXTRA
+
+# Refresh Status columns on an existing Linear release issue description.
+#   make update-ticket-statuses ISSUE=HZ-809
+#   make update-ticket-statuses ISSUE=HZ-809 DRY_RUN=1
+#   make update-ticket-statuses ISSUE=HZ-809 REFRESH_TITLES=1
+update-ticket-statuses:
+	@if [ -z "$(ISSUE)" ]; then \
+		echo "❌ ISSUE is required."; \
+		echo "Usage: make update-ticket-statuses ISSUE=HZ-809 [DRY_RUN=1] [REFRESH_TITLES=1]"; \
+		exit 1; \
+	fi
+	@EXTRA=""; \
+	if [ "$(DRY_RUN)" = "1" ]; then EXTRA="$$EXTRA --dry-run"; fi; \
+	if [ "$(REFRESH_TITLES)" = "1" ]; then EXTRA="$$EXTRA --refresh-titles"; fi; \
+	echo "Refreshing ticket statuses on $(ISSUE)…"; \
+	eval $(PYTHON) update_release_ticket_statuses.py "$(ISSUE)" $$EXTRA
 
 # Clean generated artifacts
 #   make clean                         → removes generated_files/
