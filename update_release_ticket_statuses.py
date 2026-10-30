@@ -46,7 +46,7 @@ _TICKET_ID_RE = re.compile(r"^[A-Za-z]{2,10}-\d+$")
 
 # Footer stamp so re-runs replace the previous note instead of stacking.
 _REFRESH_STAMP_RE = re.compile(
-    r"\n*_Ticket statuses last refreshed:.*_\s*$",
+    r"\n*_Ticket statuses last refreshed:[^\n]*_\s*$"
     re.IGNORECASE,
 )
 
