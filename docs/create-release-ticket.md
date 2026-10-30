@@ -190,7 +190,7 @@ make create-release-ticket-only FROM_REF=v2026.7.3 TO_REF=v2026.7.7 DRY_RUN=1
    3. Resolve workflow state **Todo**.
    4. Call Linear `issueCreate` for the main release ticket.
    5. Post a comment on the new issue:
-      `Candidate build for the coming release <TO_REF>. Cc: @saumya-ctr  @abhishes  @cesar`
+      `Candidate build for the coming release <TO_REF>. Cc: @abhishes  @cesar`
       (`<TO_REF>` is the StackGen/candidate tag passed as `--stackgen-tag`, defaulting from `TO_REF`).
    6. Create three Aiden2 subtickets under the release ticket (same assignee / team / status):
       - `[Aiden2][Weekly Release <TO_REF>] Automation Runs`

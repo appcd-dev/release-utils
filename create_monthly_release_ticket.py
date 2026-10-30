@@ -793,7 +793,7 @@ def create_aiden2_subtickets(
 
 
 # Handles mentioned on the candidate-build comment after ticket create.
-CANDIDATE_BUILD_CC_HANDLES = ("saumya-ctr", "abhishes", "cesar")
+CANDIDATE_BUILD_CC_HANDLES = ("abhishes", "cesar")
 
 
 def candidate_build_comment_body(release_id: str) -> str:
