@@ -24,68 +24,109 @@ import re
 import requests
 
 
-# Service to version key and repository mapping
+# Service to version key and repository mapping.
+# Core services that moved into the infraops monorepo keep their legacy .env
+# keys for older tags, and fall back to INFRAOPS_VERSION when that key is the
+# only one present (appcd-dist v2026.10.5+).
+_INFRAOPS_REPO = "https://github.com/appcd-dev/infraops"
+INFRAOPS_VERSION_KEY = "INFRAOPS_VERSION"
+
+
+def resolve_env_version_tag(
+    env: Dict[str, str],
+    version_key: str,
+    repository: str = "",
+) -> str:
+    """
+    Resolve a service tag from a parsed .env map.
+
+    Tries the service's own version_key first. For infraops-backed services,
+    falls back to INFRAOPS_VERSION so cuts that collapsed per-service keys
+    still get a new_tag / current_tag.
+    """
+    keys = [version_key]
+    if repository == _INFRAOPS_REPO and INFRAOPS_VERSION_KEY not in keys:
+        keys.append(INFRAOPS_VERSION_KEY)
+    for key in keys:
+        value = str((env or {}).get(key, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
 SERVICE_VERSION_MAP = {
     "ui": {
         "version_key": "APPCDUI_VERSION",
-        "repository": "https://github.com/appcd-dev/appcd-ui"
+        "repository": _INFRAOPS_REPO,
     },
     "appcd": {
         "version_key": "APPCD_VERSION",
-        "repository": "https://github.com/appcd-dev/appcd"
+        "repository": _INFRAOPS_REPO,
     },
     "iac-gen": {
         "version_key": "IACGEN_VERSION",
-        "repository": "https://github.com/appcd-dev/iac-gen"
+        "repository": _INFRAOPS_REPO,
     },
     "exporter": {
         "version_key": "STACK_EXPORTER_VERSION",
-        "repository": "https://github.com/appcd-dev/stack-exporter"
+        "repository": _INFRAOPS_REPO,
     },
     "vault": {
         "version_key": "STACKGEN_VAULT_VERSION",
-        "repository": "https://github.com/appcd-dev/stackgen-vault"
+        "repository": _INFRAOPS_REPO,
     },
     "integrations": {
         "version_key": "INTEGRATIONS_VERSION",
-        "repository": "https://github.com/appcd-dev/integrations"
-    },
-    "backstage-adapter": {
-        "version_key": "BACKSTAGE_ADAPTER_VERSION",
-        "repository": "https://github.com/appcd-dev/backstage-adapter"
+        "repository": _INFRAOPS_REPO,
     },
     "infra-catalog-tracker": {
         "version_key": "INFRA_CATALOG_TRACKER_VERSION",
-        "repository": "https://github.com/appcd-dev/infra-catalog-tracker"
-    },
-    "sgai-orchestration": {
-        "version_key": "SGAI_ORCHESTRATION",
-        "repository": "https://github.com/appcd-dev/sgai-orchestration"
+        "repository": _INFRAOPS_REPO,
     },
     "deployment-manager": {
         "version_key": "DEPLOYMENT_MANAGER_VERSION",
-        "repository": "https://github.com/appcd-dev/deployment-manager"
+        "repository": _INFRAOPS_REPO,
     },
     "notifications": {
         "version_key": "STACKGEN_NOTIFICATION",
-        "repository": "https://github.com/appcd-dev/stackgen-notification"
+        "repository": _INFRAOPS_REPO,
     },
     "tf-module-service": {
         "version_key": "TF_MODULE_SERVICE_VERSION",
-        "repository": "https://github.com/appcd-dev/tf-module-service"
+        "repository": _INFRAOPS_REPO,
     },
     "audit-manager": {
         "version_key": "AUDIT_MANAGER_VERSION",
-        "repository": "https://github.com/appcd-dev/audit-manager"
+        "repository": _INFRAOPS_REPO,
+    },
+    "backstage-adapter": {
+        "version_key": "BACKSTAGE_ADAPTER_VERSION",
+        "repository": "https://github.com/appcd-dev/backstage-adapter",
+    },
+    "sgai-orchestration": {
+        "version_key": "SGAI_ORCHESTRATION",
+        "repository": "https://github.com/appcd-dev/sgai-orchestration",
     },
     "aiden": {
         "version_key": "AIDEN_VERSION",
-        "repository": "https://github.com/appcd-dev/aiden"
+        "repository": "https://github.com/appcd-dev/aiden",
     },
     "aiden-ui": {
         "version_key": "AIDEN_UI_VERSION",
-        "repository": "https://github.com/appcd-dev/aiden-ui-v2"
-    }
+        "repository": "https://github.com/appcd-dev/aiden-ui-v2",
+    },
+    "stackgen-guild": {
+        "version_key": "STACKGEN_GUILD",
+        "repository": "https://github.com/appcd-dev/stackgen-guild",
+    },
+    "stackgen-sre-app": {
+        "version_key": "STACKGEN_SRE_APP",
+        "repository": "https://github.com/appcd-dev/stackgen-sre-app",
+    },
+    "stackgen-devops-app": {
+        "version_key": "STACKGEN_DEVOPS_APP",
+        "repository": "https://github.com/appcd-dev/stackgen-devops-app",
+    },
 }
 
 
@@ -379,8 +420,9 @@ def generate_input_json(current_versions: Dict[str, str], new_versions: Dict[str
         # Current versions use service names as keys (from version.json)
         # Default to v1.0.0 if version not found
         current_tag = current_versions.get(service_name, "v1.0.0")
-        # New versions use environment variable names as keys (from .env)
-        new_tag = new_versions.get(version_key, "")
+        # New versions use environment variable names as keys (from .env),
+        # with INFRAOPS_VERSION fallback for monorepo-backed services.
+        new_tag = resolve_env_version_tag(new_versions, version_key, repository)
         
         # Only include if at least one version exists
         if current_tag or new_tag:
